@@ -1,5 +1,6 @@
 import time
 import cv2
+import numpy as np
 import threading
 from JetsonCamera import Camera
 from Focuser import Focuser
@@ -12,7 +13,7 @@ except ModuleNotFoundError:
 
 def laplacian(img):
     img_gray = cv2.cvtColor(img,cv2.COLOR_RGB2GRAY)
-    img_sobel = cv2.Laplacian(img_gray,cv2.CV_16U)
+    img_sobel = np.abs(cv2.Laplacian(img_gray, cv2.CV_16S, ksize=3))
     return cv2.mean(img_sobel)[0]
 
 class FocusState(object):
