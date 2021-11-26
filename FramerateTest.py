@@ -1,0 +1,213 @@
+import time
+import signal
+import cv2
+import threading
+from Autofocus import focusing
+from JetsonCamera import Camera
+from Focuser import Focuser
+
+try:
+    from  Queue import  Queue
+except ModuleNotFoundError:
+    from  queue import  Queue
+
+exit_ = False
+def sigint_handler(signum, frame):
+    global exit_
+    exit_ = True
+
+signal.signal(signal.SIGINT, sigint_handler)
+signal.signal(signal.SIGTERM, sigint_handler)
+
+
+def laplacian(img):
+	img_gray = cv2.cvtColor(img,cv2.COLOR_RGB2GRAY)
+	img_sobel = cv2.Laplacian(img_gray,cv2.CV_16U)
+	return cv2.mean(img_sobel)[0]
+
+class FocusState(object):
+	def __init__(self):
+		self.lock = threading.Lock()
+		self.reset()
+	
+	def isFinish(self):
+		self.lock.acquire()
+		finish = self.finish
+		self.lock.release()
+		return finish
+
+	def setFinish(self, finish = True):
+		self.lock.acquire()
+		self.finish = finish
+		self.lock.release()
+
+	def reset(self):
+		self.sharpnessList = Queue()
+		self.finish = False
+		self.verbose = False
+
+
+def getROIFrame(roi, frame):
+	h, w = frame.shape[:2]
+	x_start = int(w * roi[0])
+	x_end = x_start + int(w * roi[2])
+
+	y_start = int(h * roi[1])
+	y_end = y_start + int(h * roi[3])
+
+	roi_frame = frame[y_start:y_end, x_start:x_end]
+	return roi_frame
+
+def statsThread(camera, focuser, focusState):
+	global exit_
+
+	FOCUS_SETP = 50
+	MOVE_TIME = 0.016
+
+	roi = (0.4, 0.4, 0.2, 0.2) # x, y, width, height
+
+	maxPosition = focuser.opts[focuser.OPT_FOCUS]["MAX_VALUE"]
+	lastPosition = 0
+	focuser.set(Focuser.OPT_FOCUS, lastPosition) # init position
+	lastTime = time.time()
+
+	sharpnessList = []
+
+	while not exit_ and not focusState.isFinish():
+		frame = camera.getFrame(1000)
+	
+		if frame is None:
+			continue
+
+		roi_frame = getROIFrame(roi, frame)
+
+		# cv2.imshow("ROI", roi_frame)
+		
+		if time.time() - lastTime >= MOVE_TIME and not focusState.isFinish():
+			if lastPosition != maxPosition:
+				focuser.set(Focuser.OPT_FOCUS, lastPosition + FOCUS_SETP)
+				lastTime = time.time()
+
+			sharpness = laplacian(roi_frame)
+			# print("position: {}, sharpness: {}".format(lastPosition, sharpness))
+			item = (lastPosition, sharpness)
+			sharpnessList.append(item)
+			focusState.sharpnessList.put(item)
+
+			lastPosition += FOCUS_SETP
+
+			if lastPosition > maxPosition:
+				break
+
+	# End of stats.
+	focusState.sharpnessList.put((-1, -1))
+
+	if focusState.verbose:
+		for sharpness in sharpnessList:
+			print(sharpness)
+
+		print("stats done.")
+
+# Most simple way, walk through the whole range and choose max position.
+'''
+def focusThread(focuser, focusState):
+	sharpnessList = []
+	while not exit_ and not focusState.isFinish():
+		position, sharpness = focusState.sharpnessList.get()
+		print("got stats data: {}, {}".format(position, sharpness))
+
+		if position == -1 and sharpness == -1:
+			break
+
+		sharpnessList.append((position, sharpness))
+	
+	focusState.setFinish()
+
+	maxItem = max(sharpnessList, key=lambda item:item[1])
+	print("max: {}".format(maxItem))
+	focuser.set(Focuser.OPT_FOCUS, maxItem[0])
+'''
+
+# Try to make it fast.
+def focusThread(focuser, focusState):
+	sharpnessList = []
+
+	continuousDecline = 0
+	maxPosition = 0
+	lastSharpness = 0
+	while not exit_ and not focusState.isFinish():
+		position, sharpness = focusState.sharpnessList.get()
+		if focusState.verbose:
+			print("got stats data: {}, {}".format(position, sharpness))
+
+		if lastSharpness / sharpness >= 1:
+			continuousDecline += 1
+		else:
+			continuousDecline = 0
+			maxPosition = position
+
+		lastSharpness = sharpness
+
+		if continuousDecline >= 3:
+			focusState.setFinish()
+
+		if position == -1 and sharpness == -1:
+			break
+
+		sharpnessList.append((position, sharpness))
+	
+	# Mark to finish.
+	focusState.setFinish()
+
+	maxItem = max(sharpnessList, key=lambda item:item[1])
+
+	if focusState.verbose:
+		print("max: {}".format(maxItem))
+	
+	if continuousDecline < 3:
+		focuser.set(Focuser.OPT_FOCUS, maxItem[0])
+	else:
+		focuser.set(Focuser.OPT_FOCUS, maxPosition)
+
+
+def doFocus(camera, focuser, focusState):
+	statsThread_ = threading.Thread(target=statsThread, args=(camera, focuser, focusState))
+	statsThread_.daemon = True
+	statsThread_.start()
+
+	focusThread_ = threading.Thread(target=focusThread, args=(focuser, focusState))
+	focusThread_.daemon = True
+	focusThread_.start()
+
+if __name__ == "__main__":
+	camera = Camera()
+	focuser = Focuser(7)
+
+	focusState = FocusState()
+	# focusState.verbose = True
+	doFocus(camera, focuser, focusState)
+
+	start = time.time()
+	frame_count = 0
+
+	while not exit_:
+		frame = camera.getFrame(2000)
+
+		cv2.imshow("Test", frame)
+		key = cv2.waitKey(1)
+		if key == ord('q'):
+			exit_ = True
+		if key == ord('f'):
+			if focusState.isFinish():
+				focusState.reset()
+				doFocus(camera, focuser, focusState)
+			else:
+				print("Focus is not done yet.")
+
+		frame_count += 1
+		if time.time() - start >= 1:
+			print("{}fps".format(frame_count))
+			start = time.time()
+			frame_count = 0
+
+	camera.close()
