@@ -41,6 +41,7 @@ class Focuser:
     def __init__(self, bus):
         self.focus_value = 0
         self.bus = bus
+        self.verbose = False
         init(self.bus, self.CHIP_I2C_ADDR)
         
     def read(self):
@@ -85,7 +86,8 @@ class Focuser:
         elif value < info["MIN_VALUE"]:
             value = info["MIN_VALUE"]
         self.write(self.CHIP_I2C_ADDR, value)
-        print("write: {}".format(value))
+        if self.verbose:
+            print("write: {}".format(value))
 
 pass 
 
