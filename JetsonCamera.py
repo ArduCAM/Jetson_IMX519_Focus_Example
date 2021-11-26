@@ -103,11 +103,11 @@ class Camera(object):
     cap = None
     previewer = None
 
-    def __init__(self):
-        self.open_camera()
+    def __init__(self, width=640, height=360):
+        self.open_camera(width, height)
 
-    def open_camera(self):
-        self.cap = cv2.VideoCapture(gstreamer_pipeline(flip_method=0), cv2.CAP_GSTREAMER)
+    def open_camera(self, width=640, height=360):
+        self.cap = cv2.VideoCapture(gstreamer_pipeline(flip_method=0, display_width=width, display_height=height), cv2.CAP_GSTREAMER)
         if not self.cap.isOpened():
             raise RuntimeError("Failed to open camera!")
         if self.frame_reader == None:
