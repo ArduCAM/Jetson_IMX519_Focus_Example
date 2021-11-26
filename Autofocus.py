@@ -19,6 +19,7 @@ def laplacian(img):
 class FocusState(object):
     def __init__(self):
         self.lock = threading.Lock()
+        self.verbose = False
         self.reset()
     
     def isFinish(self):
@@ -35,7 +36,6 @@ class FocusState(object):
     def reset(self):
         self.sharpnessList = Queue()
         self.finish = False
-        self.verbose = False
 
 
 def getROIFrame(roi, frame):
@@ -72,7 +72,8 @@ def statsThread(camera, focuser, focusState):
 
         roi_frame = getROIFrame(roi, frame)
 
-        # cv2.imshow("ROI", roi_frame)
+        if focusState.verbose:
+            cv2.imshow("ROI", roi_frame)
         
         if time.time() - lastTime >= MOVE_TIME and not focusState.isFinish():
             if lastPosition != maxPosition:
