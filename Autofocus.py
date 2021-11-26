@@ -18,8 +18,12 @@ def laplacian(img):
 
 class FocusState(object):
     def __init__(self):
+        self.FOCUS_SETP = 50
+        self.MOVE_TIME = 0.016
+
         self.lock = threading.Lock()
         self.verbose = False
+        self.roi = (0.4, 0.4, 0.2, 0.2) # x, y, width, height
         self.reset()
     
     def isFinish(self):
@@ -50,13 +54,6 @@ def getROIFrame(roi, frame):
     return roi_frame
 
 def statsThread(camera, focuser, focusState):
-    global exit_
-
-    FOCUS_SETP = 50
-    MOVE_TIME = 0.016
-
-    roi = (0.4, 0.4, 0.2, 0.2) # x, y, width, height
-
     maxPosition = focuser.opts[focuser.OPT_FOCUS]["MAX_VALUE"]
     lastPosition = 0
     focuser.set(Focuser.OPT_FOCUS, lastPosition) # init position
@@ -70,14 +67,14 @@ def statsThread(camera, focuser, focusState):
         if frame is None:
             continue
 
-        roi_frame = getROIFrame(roi, frame)
+        roi_frame = getROIFrame(focusState.roi, frame)
 
         if focusState.verbose:
             cv2.imshow("ROI", roi_frame)
         
-        if time.time() - lastTime >= MOVE_TIME and not focusState.isFinish():
+        if time.time() - lastTime >= focusState.MOVE_TIME and not focusState.isFinish():
             if lastPosition != maxPosition:
-                focuser.set(Focuser.OPT_FOCUS, lastPosition + FOCUS_SETP)
+                focuser.set(Focuser.OPT_FOCUS, lastPosition + focusState.FOCUS_SETP)
                 lastTime = time.time()
 
             sharpness = laplacian(roi_frame)
@@ -86,7 +83,7 @@ def statsThread(camera, focuser, focusState):
             sharpnessList.append(item)
             focusState.sharpnessList.put(item)
 
-            lastPosition += FOCUS_SETP
+            lastPosition += focusState.FOCUS_SETP
 
             if lastPosition > maxPosition:
                 break
